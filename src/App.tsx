@@ -1,11 +1,12 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import "./App.css";
 import { Fruit, Row, SnakeComponent, Square } from "./styles";
 
-const TICK_SNAKE_SPEED = 300;
-const TICK_GAME = 100;
+let TICK_SNAKE_SPEED = 600;
+const TICK_GAME = 200;
 const TICK_FRUIT_GENERATION = 2000;
+const BOARD_LENGTH = 30;
 
 interface IPosition {
   row: number;
@@ -77,21 +78,10 @@ function shouldRenderElement(item: ISnake | IFruit, currentSquare: IPosition) {
 }
 
 function getNextSnake(snake: ISnake, direction: enDirection) {
-  const head: IPosition = getPartUpdated(
-    {
-      row: snake[0].row,
-      column: snake[0].column,
-    },
-    direction
-  );
+  const head: IPosition = getPartUpdated(snake[0], direction);
 
   let body: IPosition[] = [];
   for (let index = 1; index < snake.length; index++) {
-    if (index === 1) {
-      body.push(getNextPosition(snake[index], snake[0]));
-      continue;
-    }
-
     body.push(getNextPosition(snake[index], snake[index - 1]));
   }
 
@@ -101,10 +91,7 @@ function getNextSnake(snake: ISnake, direction: enDirection) {
 function board() {
   return new Array(BOARD_LENGTH).fill(true);
 }
-
-const BOARD_LENGTH = 30;
-
-function handleKeyPress(event: React.KeyboardEvent<HTMLDivElement>) {
+function keyEventToDirection(event: React.KeyboardEvent<HTMLDivElement>) {
   if (event.key === "ArrowRight") {
     return enDirection.right;
   }
@@ -119,6 +106,23 @@ function handleKeyPress(event: React.KeyboardEvent<HTMLDivElement>) {
   }
 
   return enDirection.right;
+}
+
+function getAllowedMovement(current: enDirection, nextDirection: enDirection) {
+  if (current === enDirection.right && nextDirection === enDirection.left) {
+    return enDirection.right;
+  }
+  if (current === enDirection.left && nextDirection === enDirection.right) {
+    return enDirection.left;
+  }
+  if (current === enDirection.down && nextDirection === enDirection.up) {
+    return enDirection.down;
+  }
+  if (current === enDirection.up && nextDirection === enDirection.down) {
+    return enDirection.up;
+  }
+
+  return nextDirection;
 }
 
 function getRandomBoardPosition() {
@@ -136,73 +140,123 @@ function getFruitToEat(snake: ISnake, fruits: IFruit) {
   );
 }
 
+function validIfLoose(snake: ISnake) {
+  const head = snake[0];
+  const ateItSelf = snake
+    .filter((_, index) => index !== 0)
+    .some((p) => p.column === head.column && p.row === head.row);
+
+  const outsideArea =
+    head.column > BOARD_LENGTH ||
+    head.column < 0 ||
+    head.row > BOARD_LENGTH ||
+    head.row < 0;
+
+  return ateItSelf || outsideArea;
+}
+
 function App() {
-  const [snake, setSnake] = useState<ISnake>([
+  const loose = useRef(false);
+  const score = useRef(0);
+  const gameIntervalId = useRef(0);
+  const snakeTimeoutId = useRef(0);
+  const snake = useRef([
     { row: 0, column: 2 },
     { row: 0, column: 1 },
     { row: 0, column: 0 },
   ]);
+  const fruits = useRef<IFruit>([]);
   const direction = useRef(enDirection.right);
-  const [fruits, setFruits] = useState<IFruit>([]);
+  const [, setGame] = useState(false);
+
+  function processEatFruits() {
+    const fruitEaten = getFruitToEat(snake.current, fruits.current);
+
+    if (fruitEaten) {
+      score.current++;
+
+      if (TICK_SNAKE_SPEED >= 100) {
+        TICK_SNAKE_SPEED = TICK_SNAKE_SPEED - 30;
+      }
+
+      const lastPart = snake.current[snake.current.length - 1];
+
+      snake.current = [
+        ...snake.current,
+        getPartUpdated(lastPart, direction.current),
+      ];
+
+      const fruitIndex = fruits.current.findIndex(
+        (c) => c.row === fruitEaten.row && c.column === fruitEaten.column
+      );
+      fruits.current.splice(fruitIndex, 1);
+    }
+  }
 
   useEffect(() => {
-    const intervalGame = setInterval(() => {
-      const fruitEaten = getFruitToEat(snake, fruits);
+    gameIntervalId.current = window.setInterval(() => {
+      processEatFruits();
+      loose.current = validIfLoose(snake.current);
 
-      if (fruitEaten) {
-        setSnake((prev) => {
-          const lastPart = prev[prev.length - 1];
-          return [...prev, getPartUpdated(lastPart, direction.current)];
-        });
-        setFruits((prev) =>
-          prev.filter(
-            (fruit) =>
-              fruit.column !== fruitEaten.column && fruit.row !== fruitEaten.row
-          )
-        );
+      if (loose.current) {
+        clearInterval(gameIntervalId.current);
       }
+      setGame((prev) => !prev);
     }, TICK_GAME);
     return () => {
-      clearInterval(intervalGame);
+      clearInterval(gameIntervalId.current);
     };
-  }, [fruits, snake]);
+  }, []);
 
   useEffect(() => {
-    console.log(" aaa");
+    function processSnake() {
+      snake.current = getNextSnake(snake.current, direction.current);
 
-    const intervalSnakeSpeed = setInterval(() => {
-      setSnake((prev) => getNextSnake(prev, direction.current));
-    }, TICK_SNAKE_SPEED);
+      snakeTimeoutId.current = window.setTimeout(() => {
+        processSnake();
+      }, TICK_SNAKE_SPEED);
+    }
 
-    const intervalFruits = setInterval(() => {
-      setFruits((prev) => [...prev, getRandomPosition()]);
-    }, TICK_FRUIT_GENERATION);
+    processSnake();
 
     return () => {
-      console.log(" unmounted");
-
-      clearInterval(intervalSnakeSpeed);
-      clearInterval(intervalFruits);
+      clearTimeout(snakeTimeoutId.current);
     };
   }, [direction]);
 
+  useEffect(() => {
+    const intervalFruits = setInterval(() => {
+      fruits.current.push(getRandomPosition());
+    }, TICK_FRUIT_GENERATION);
+
+    return () => {
+      clearInterval(intervalFruits);
+    };
+  }, [direction, fruits]);
+
+  const handleKeyPress = useCallback(
+    (ev: React.KeyboardEvent<HTMLDivElement>) => {
+      direction.current = getAllowedMovement(
+        direction.current,
+        keyEventToDirection(ev)
+      );
+    },
+    []
+  );
+
   return (
-    <div
-      className="App"
-      tabIndex={0}
-      onKeyDown={(ev) => {
-        direction.current = handleKeyPress(ev);
-      }}
-    >
+    <div className="App" tabIndex={0} onKeyDown={handleKeyPress}>
+      {loose.current && <p>Ohhh nooo</p>}
+      Score: {score.current}
       {board().map((_, rowIndex) => {
         const row = board().map((_, columnIndex) => {
           const key = `${rowIndex}-${columnIndex}`;
           const currentCell = { row: rowIndex, column: columnIndex };
 
-          if (shouldRenderElement(snake, currentCell))
+          if (shouldRenderElement(snake.current, currentCell))
             return <SnakeComponent key={key} />;
 
-          if (shouldRenderElement(fruits, currentCell))
+          if (shouldRenderElement(fruits.current, currentCell))
             return <Fruit key={key} />;
 
           return <Square key={key} />;
